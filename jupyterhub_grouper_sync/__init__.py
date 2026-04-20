@@ -423,21 +423,39 @@ class GrouperSync(Application):
 
             async def maybe_sync():
                 today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
-                if today in self.next_available_mw and self._last_synced_date != today:
-                    self.log.info(f"Today ({today}) is in next_available_mw. Running sync.")
-                    self._last_synced_date = today
-                    await sync_groups()
-                else:
-                    if self._last_synced_date == today:
-                        self.log.info(f"Sync already ran today ({today}). Skipping.")
-                    else:
-                        self.log.info(
-                            f"Today ({today}) is not in next_available_mw "
-                            f"{self.next_available_mw}. Waiting."
-                        )
 
-            loop.add_callback(maybe_sync)
-            pc = PeriodicCallback(maybe_sync, 1e3 * self.sync_every)
+                # Not in maintenance window → just keep looping
+                if today not in self.next_available_mw:
+                    self.log.info(
+                        f"{today} not in maintenance window {self.next_available_mw}. Waiting."
+                    )
+                    return
+
+                # Already ran today → skip safely
+                if self._last_synced_date == today:
+                    self.log.info(f"Sync already ran today ({today}). Skipping.")
+                    return
+
+                # Mark BEFORE running the sync to avoid the possibility of multiple concurrent syncs if one takes a long time to run
+                self._last_synced_date = today
+
+                try:
+                    self.log.info(f"Running sync for maintenance window day {today}")
+                    await sync_groups()
+                except Exception:
+                    self.log.exception("sync failed")
+
+
+            def run_maybe_sync():
+                # This ensures the coroutine actually runs
+                asyncio.create_task(maybe_sync())
+
+
+            # Run once immediately
+            loop.add_callback(run_maybe_sync)
+
+            # Run periodically
+            pc = PeriodicCallback(run_maybe_sync, 1e3 * self.sync_every)
             pc.start()
 
         try:
