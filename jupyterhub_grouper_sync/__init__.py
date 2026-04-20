@@ -424,19 +424,27 @@ class GrouperSync(Application):
             pc = PeriodicCallback(sync_groups, 1e3 * self.sync_every)
             pc.start()
         else:
-            today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
-            if today in self.next_available_mw:
-                # Maintenance window set and today matches — run exactly once
-                self.log.info(
-                    f"Today ({today}) is in next_available_mw. Running sync once."
-                )
-                loop.add_callback(sync_groups)
-            else:
-                # Maintenance window set but today does not match — never run
-                self.log.info(
-                    f"Today ({today}) is not in next_available_mw "
-                    f"{self.next_available_mw}. Sleeping forever."
-                )
+            # Maintenance window set — poll periodically and run once per matching day
+            self._last_synced_date = None
+
+            async def maybe_sync():
+                today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
+                if today in self.next_available_mw and self._last_synced_date != today:
+                    self.log.info(f"Today ({today}) is in next_available_mw. Running sync.")
+                    self._last_synced_date = today
+                    await sync_groups()
+                else:
+                    if self._last_synced_date == today:
+                        self.log.debug(f"Sync already ran today ({today}). Skipping.")
+                    else:
+                        self.log.debug(
+                            f"Today ({today}) is not in next_available_mw "
+                            f"{self.next_available_mw}. Waiting."
+                        )
+
+            loop.add_callback(maybe_sync)
+            pc = PeriodicCallback(maybe_sync, 1e3 * self.sync_every)
+            pc.start()
 
         try:
             loop.start()
