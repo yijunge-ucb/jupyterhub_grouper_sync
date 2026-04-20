@@ -377,8 +377,14 @@ class GrouperSync(Application):
 
     def start(self):
         if not self.enabled:
-            self.log.info("GrouperSync is disabled (enabled=False). Exiting.")
-            sys.exit(0)
+            self.log.info("GrouperSync is disabled (enabled=False). Sleeping forever.")
+            loop = IOLoop.current()
+            try:
+                loop.start()
+            except KeyboardInterrupt:
+                pass
+            return
+        
         try:
             api_token = os.environ["JUPYTERHUB_API_TOKEN"]
         except Exception as e:
