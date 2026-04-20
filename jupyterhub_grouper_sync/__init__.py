@@ -4,6 +4,8 @@ import subprocess
 import asyncio
 import json
 import logging
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from functools import partial
 from textwrap import dedent
 
@@ -12,7 +14,7 @@ from tornado.httpclient import AsyncHTTPClient, HTTPRequest
 from tornado.httputil import url_concat
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.log import LogFormatter
-from traitlets import Int, Unicode, default
+from traitlets import Int, Unicode, default, Bool, List
 from traitlets.config import Application
 
 
@@ -254,6 +256,38 @@ class GrouperSync(Application):
 
     _log_formatter_cls = LogFormatter
 
+    enabled = Bool(
+        True,
+        help=dedent(
+            """
+            Enable or disable the GrouperSync service entirely.
+            When set to False the process starts but no syncs are ever run.
+            """
+        ).strip(),
+    ).tag(config=True)
+
+    next_available_mw = List(
+        [],
+        help=dedent(
+            """
+            An optional list of dates (ISO 8601 strings, e.g. "2024-06-01")
+            that act as allowed maintenance windows. When this list is
+            non-empty a sync will only be executed if today's date matches
+            one of the listed dates. An empty list means "do not run".
+            """
+        ).strip(),
+    ).tag(config=True)
+
+
+    def _is_mw_allowed(self):
+        """Return True if today (Pacific/Los Angeles time) is an allowed
+        maintenance-window date."""
+        if not self.next_available_mw:
+            return False
+        today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
+        return today in self.next_available_mw
+    
+
     @default("log_level")
     def _log_level_default(self):
         return logging.INFO
@@ -336,6 +370,8 @@ class GrouperSync(Application):
         "grouper_user": "GrouperSync.grouper_user",
         "grouper_pass": "GrouperSync.grouper_pass",
         "grouper_id_path": "GrouperSync.grouper_id_path",
+        "enabled": "GrouperSync.enabled",
+        "next_available_mw": "GrouperSync.next_available_mw",
     }
 
     def start(self):
@@ -366,11 +402,32 @@ class GrouperSync(Application):
             concurrency=self.concurrency,
             api_page_size=self.api_page_size,
         )
+
+        async def should_sync():
+            """Run a sync only when the maintenance-window check passes."""
+            if not self._is_mw_allowed():
+                self.log.info(
+                    f"Skipping sync: today ({date.today().isoformat()}) is not in "
+                    f"next_available_mw {self.next_available_mw}."
+                )
+                return
+            await sync_users_to_groups(
+                url=self.url,
+                api_token=api_token,
+                grouper_user=self.grouper_user,
+                grouper_pass=self.grouper_pass,
+                grouper_base_url=self.grouper_base_url,
+                grouper_id_path=self.grouper_id_path,
+                logger=self.log,
+                concurrency=self.concurrency,
+                api_page_size=self.api_page_size,
+            )
+
         # schedule first sync immediately
         # because PeriodicCallback doesn't start until the end of the first interval
-        loop.add_callback(sync_groups)
+        loop.add_callback(should_sync)
         # schedule periodic sync
-        pc = PeriodicCallback(sync_groups, 1e3 * self.sync_every)
+        pc = PeriodicCallback(should_sync, 1e3 * self.sync_every)
         pc.start()
         try:
             loop.start()
