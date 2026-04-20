@@ -4,7 +4,7 @@ import subprocess
 import asyncio
 import json
 import logging
-from datetime import date, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from functools import partial
 from textwrap import dedent
@@ -427,15 +427,12 @@ class GrouperSync(Application):
                 )
 
         def callback():
-            self.log.info("Starting conditional_sync()")
             loop.add_callback(conditional_sync)
 
         # run immediately 
-        self.log.info("Starting callback() immediately on startup")
         callback()
 
         # periodic loop
-        self.log.info(f"Setting up periodic sync every {self.sync_every} seconds")
         pc = PeriodicCallback(callback, int(1e3 * self.sync_every))
         pc.start()
 
