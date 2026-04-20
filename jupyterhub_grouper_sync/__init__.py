@@ -267,7 +267,8 @@ class GrouperSync(Application):
     ).tag(config=True)
 
     next_available_mw = List(
-        [],
+        Unicode(),
+        default_value=[],
         help=dedent(
             """
             An optional list of dates (ISO 8601 strings, e.g. "2024-06-01")
@@ -366,15 +367,6 @@ class GrouperSync(Application):
     }
 
     def start(self):
-        if not self.enabled:
-            self.log.info("GrouperSync is disabled (enabled=False). Sleeping forever.")
-            loop = IOLoop.current()
-            try:
-                loop.start()
-            except KeyboardInterrupt:
-                pass
-            return
-
         try:
             api_token = os.environ["JUPYTERHUB_API_TOKEN"]
         except Exception as e:
@@ -404,59 +396,48 @@ class GrouperSync(Application):
             api_page_size=self.api_page_size,
         )
 
-        if not self.next_available_mw:
-            # No maintenance window set — run immediately, then on every sync_every interval
-            self.log.info(
-                f"No maintenance window configured. "
-                f"Running sync every {self.sync_every}s."
-            )
-            loop.add_callback(sync_groups)
-            pc = PeriodicCallback(sync_groups, 1e3 * self.sync_every)
-            pc.start()
-        else:
-            self.log.info(
-                f"Maintenance window configured for {self.next_available_mw}. "
-                f"Will check every {self.sync_every}s and run sync on matching days."
-            )
-            # Maintenance window set — poll periodically and run once per matching day
-            self._last_synced_date = None
+        last_run_date = {"date": None}  # prevent multiple runs per day
 
-            async def maybe_sync():
-                today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
+        async def conditional_sync():
+            if not self.enabled:
+                self.log.info("Sync disabled (enabled=False). Skipping.")
+                return
 
-                # Not in maintenance window → just keep looping
-                if today not in self.next_available_mw:
-                    self.log.info(
-                        f"{today} not in maintenance window {self.next_available_mw}. Waiting."
-                    )
+            now_la = datetime.now(ZoneInfo("America/Los_Angeles"))
+            today_str = now_la.strftime("%Y-%m-%d")
+
+            # No date restriction → run every interval
+            if not self.next_available_mw:
+                self.log.info("No date restriction. Running sync.")
+                await sync_groups()
+                return
+
+            # Date-restricted execution
+            if today_str in self.next_available_mw:
+                if last_run_date["date"] == today_str:
+                    self.log.info("Already ran today. Waiting for next scheduled date.")
                     return
 
-                # Already ran today → skip safely
-                if self._last_synced_date == today:
-                    self.log.info(f"Sync already ran today ({today}). Skipping.")
-                    return
+                self.log.info(f"Today ({today_str}) is scheduled. Running sync.")
+                last_run_date["date"] = today_str
+                await sync_groups()
+            else:
+                self.log.info(
+                    f"Today ({today_str}) not in scheduled dates {self.next_available_mw}. Waiting."
+                )
 
-                # Mark BEFORE running the sync to avoid the possibility of multiple concurrent syncs if one takes a long time to run
-                self._last_synced_date = today
+        def callback():
+            self.log.info("Starting conditional_sync()")
+            loop.add_callback(conditional_sync)
 
-                try:
-                    self.log.info(f"Running sync for maintenance window day {today}")
-                    await sync_groups()
-                except Exception:
-                    self.log.exception("sync failed")
+        # run immediately 
+        self.log.info("Starting callback() immediately on startup")
+        callback()
 
-
-            def run_maybe_sync():
-                # This ensures the coroutine actually runs
-                asyncio.create_task(maybe_sync())
-
-
-            # Run once immediately
-            loop.add_callback(run_maybe_sync)
-
-            # Run periodically
-            pc = PeriodicCallback(run_maybe_sync, 1e3 * self.sync_every)
-            pc.start()
+        # periodic loop
+        self.log.info(f"Setting up periodic sync every {self.sync_every} seconds")
+        pc = PeriodicCallback(callback, int(1e3 * self.sync_every))
+        pc.start()
 
         try:
             loop.start()
