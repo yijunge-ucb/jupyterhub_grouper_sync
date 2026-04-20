@@ -372,6 +372,7 @@ class GrouperSync(Application):
         "grouper_id_path": "GrouperSync.grouper_id_path",
         "enabled": "GrouperSync.enabled",
         "next_available_mw": "GrouperSync.next_available_mw",
+        "sync_every": "GrouperSync.sync_every",
     }
 
     def start(self):
