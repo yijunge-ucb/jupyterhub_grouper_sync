@@ -278,16 +278,6 @@ class GrouperSync(Application):
         ).strip(),
     ).tag(config=True)
 
-
-    def _is_mw_allowed(self):
-        """
-        Return True if today (Pacific/Los Angeles time) is an allowed
-        maintenance-window dates.
-        """
-        today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
-        return today in self.next_available_mw
-    
-
     @default("log_level")
     def _log_level_default(self):
         return logging.INFO
@@ -424,6 +414,10 @@ class GrouperSync(Application):
             pc = PeriodicCallback(sync_groups, 1e3 * self.sync_every)
             pc.start()
         else:
+            self.log.info(
+                f"Maintenance window configured for {self.next_available_mw}. "
+                f"Will check every {self.sync_every}s and run sync on matching days."
+            )
             # Maintenance window set — poll periodically and run once per matching day
             self._last_synced_date = None
 
@@ -435,9 +429,9 @@ class GrouperSync(Application):
                     await sync_groups()
                 else:
                     if self._last_synced_date == today:
-                        self.log.debug(f"Sync already ran today ({today}). Skipping.")
+                        self.log.info(f"Sync already ran today ({today}). Skipping.")
                     else:
-                        self.log.debug(
+                        self.log.info(
                             f"Today ({today}) is not in next_available_mw "
                             f"{self.next_available_mw}. Waiting."
                         )
