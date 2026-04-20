@@ -375,6 +375,9 @@ class GrouperSync(Application):
     }
 
     def start(self):
+        if not self.enabled:
+            self.log.info("GrouperSync is disabled (enabled=False). Exiting.")
+            sys.exit(0)
         try:
             api_token = os.environ["JUPYTERHUB_API_TOKEN"]
         except Exception as e:
@@ -390,18 +393,6 @@ class GrouperSync(Application):
             )
 
         loop = IOLoop.current()
-        sync_groups = partial(
-            sync_users_to_groups,
-            url=self.url,
-            api_token=api_token,
-            grouper_user=self.grouper_user,
-            grouper_pass=self.grouper_pass,
-            grouper_base_url=self.grouper_base_url,
-            grouper_id_path=self.grouper_id_path,
-            logger=self.log,
-            concurrency=self.concurrency,
-            api_page_size=self.api_page_size,
-        )
 
         async def should_sync():
             """Run a sync only when the maintenance-window check passes."""
