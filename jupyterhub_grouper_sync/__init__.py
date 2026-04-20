@@ -375,73 +375,73 @@ class GrouperSync(Application):
         "sync_every": "GrouperSync.sync_every",
     }
 
-def start(self):
-    if not self.enabled:
-        self.log.info("GrouperSync is disabled (enabled=False). Sleeping forever.")
+    def start(self):
+        if not self.enabled:
+            self.log.info("GrouperSync is disabled (enabled=False). Sleeping forever.")
+            loop = IOLoop.current()
+            try:
+                loop.start()
+            except KeyboardInterrupt:
+                pass
+            return
+
+        try:
+            api_token = os.environ["JUPYTERHUB_API_TOKEN"]
+        except Exception as e:
+            self.log.error(f"Error getting JUPYTERHUB_API_TOKEN. {e}")
+            sys.exit(1)
+
+        try:
+            AsyncHTTPClient.configure("tornado.curl_httpclient.CurlAsyncHTTPClient")
+        except ImportError as e:
+            self.log.warning(
+                f"Could not load pycurl: {e}\n"
+                "pycurl is recommended if you have a large number of users."
+            )
+
         loop = IOLoop.current()
+
+        sync_groups = partial(
+            sync_users_to_groups,
+            url=self.url,
+            api_token=api_token,
+            grouper_user=self.grouper_user,
+            grouper_pass=self.grouper_pass,
+            grouper_base_url=self.grouper_base_url,
+            grouper_id_path=self.grouper_id_path,
+            logger=self.log,
+            concurrency=self.concurrency,
+            api_page_size=self.api_page_size,
+        )
+
+        if not self.next_available_mw:
+            # No maintenance window set — run immediately, then on every sync_every interval
+            self.log.info(
+                f"No maintenance window configured. "
+                f"Running sync every {self.sync_every}s."
+            )
+            loop.add_callback(sync_groups)
+            pc = PeriodicCallback(sync_groups, 1e3 * self.sync_every)
+            pc.start()
+        else:
+            today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
+            if today in self.next_available_mw:
+                # Maintenance window set and today matches — run exactly once
+                self.log.info(
+                    f"Today ({today}) is in next_available_mw. Running sync once."
+                )
+                loop.add_callback(sync_groups)
+            else:
+                # Maintenance window set but today does not match — never run
+                self.log.info(
+                    f"Today ({today}) is not in next_available_mw "
+                    f"{self.next_available_mw}. Sleeping forever."
+                )
+
         try:
             loop.start()
         except KeyboardInterrupt:
             pass
-        return
-
-    try:
-        api_token = os.environ["JUPYTERHUB_API_TOKEN"]
-    except Exception as e:
-        self.log.error(f"Error getting JUPYTERHUB_API_TOKEN. {e}")
-        sys.exit(1)
-
-    try:
-        AsyncHTTPClient.configure("tornado.curl_httpclient.CurlAsyncHTTPClient")
-    except ImportError as e:
-        self.log.warning(
-            f"Could not load pycurl: {e}\n"
-            "pycurl is recommended if you have a large number of users."
-        )
-
-    loop = IOLoop.current()
-
-    sync_groups = partial(
-        sync_users_to_groups,
-        url=self.url,
-        api_token=api_token,
-        grouper_user=self.grouper_user,
-        grouper_pass=self.grouper_pass,
-        grouper_base_url=self.grouper_base_url,
-        grouper_id_path=self.grouper_id_path,
-        logger=self.log,
-        concurrency=self.concurrency,
-        api_page_size=self.api_page_size,
-    )
-
-    if not self.next_available_mw:
-        # No maintenance window set — run immediately, then on every sync_every interval
-        self.log.info(
-            f"No maintenance window configured. "
-            f"Running sync every {self.sync_every}s."
-        )
-        loop.add_callback(sync_groups)
-        pc = PeriodicCallback(sync_groups, 1e3 * self.sync_every)
-        pc.start()
-    else:
-        today = datetime.now(tz=ZoneInfo("America/Los_Angeles")).date().isoformat()
-        if today in self.next_available_mw:
-            # Maintenance window set and today matches — run exactly once
-            self.log.info(
-                f"Today ({today}) is in next_available_mw. Running sync once."
-            )
-            loop.add_callback(sync_groups)
-        else:
-            # Maintenance window set but today does not match — never run
-            self.log.info(
-                f"Today ({today}) is not in next_available_mw "
-                f"{self.next_available_mw}. Sleeping forever."
-            )
-
-    try:
-        loop.start()
-    except KeyboardInterrupt:
-        pass
 
 
 def main():
